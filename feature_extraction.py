@@ -1,11 +1,7 @@
 
-import os
-import urllib.request
-from pathlib import Path
-
 import cv2
 import numpy as np
-import mediapipe as mp
+from pathlib import Path
 
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
@@ -13,28 +9,15 @@ from skimage.feature import local_binary_pattern
 
 
 # =====================================================
-# PATH MODEL
+# PATH MODEL FACE LANDMARKER
 # =====================================================
 BASE_DIR = Path(__file__).resolve().parent
-MODEL_DIR = BASE_DIR / "models"
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_PATH = BASE_DIR / "models" / "face_landmarker.task"
 
-MODEL_PATH = MODEL_DIR / "face_landmarker.task"
-
-MODEL_URL = (
-    "https://storage.googleapis.com/mediapipe-models/"
-    "face_landmarker/face_landmarker/float16/1/"
-    "face_landmarker.task"
-)
-
-# Unduh model hanya jika belum ada di folder models
-if not MODEL_PATH.exists():
-    print("Mengunduh model Face Landmarker ke folder models...")
-    urllib.request.urlretrieve(
-        MODEL_URL,
-        str(MODEL_PATH)
+if not MODEL_PATH.is_file():
+    raise FileNotFoundError(
+        f"Model Face Landmarker tidak ditemukan: {MODEL_PATH}"
     )
-    print("Model berhasil diunduh:", MODEL_PATH)
 
 
 # =====================================================
