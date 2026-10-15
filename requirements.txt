@@ -4,7 +4,7 @@ streamlit-webrtc
 opencv-python-headless
 numpy
 Pillow
-mediapipe
+mediapipe==0.10.13
 scikit-image
 scikit-learn
 joblib
