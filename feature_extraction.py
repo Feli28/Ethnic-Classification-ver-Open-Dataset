@@ -14,6 +14,10 @@ from skimage.feature import local_binary_pattern
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "models" / "face_landmarker.task"
 
+
+# =====================================================
+# VALIDASI FILE MODEL
+# =====================================================
 if not MODEL_PATH.is_file():
     raise FileNotFoundError(
         f"Model Face Landmarker tidak ditemukan: {MODEL_PATH}"
@@ -21,7 +25,7 @@ if not MODEL_PATH.is_file():
 
 
 # =====================================================
-# MEDIAPIPE TASKS - FACE LANDMARKER 478
+# MEDIAPIPE TASKS - FACE LANDMARKER
 # =====================================================
 base_options = python.BaseOptions(
     model_asset_path=str(MODEL_PATH)
@@ -37,16 +41,86 @@ options = vision.FaceLandmarkerOptions(
     output_facial_transformation_matrixes=False
 )
 
-face_landmarker = vision.FaceLandmarker.create_from_options(
-    options
-)
+
+# =====================================================
+# INISIALISASI FACE LANDMARKER
+# =====================================================
+try:
+    face_landmarker = vision.FaceLandmarker.create_from_options(
+        options
+    )
+except Exception as e:
+    raise RuntimeError(
+        "Gagal menginisialisasi MediaPipe Face Landmarker. "
+        f"{type(e).__name__}: {e}"
+    ) from e
+
+
+# =====================================================
+# DETEKSI LANDMARK WAJAH
+# =====================================================
+def detect_landmarks(image_bgr):
+    """
+    Input:
+        image_bgr: gambar OpenCV dalam format BGR.
+
+    Output:
+        List berisi array landmark berukuran (478, 3).
+        Mengembalikan list kosong jika wajah tidak terdeteksi.
+    """
+    if image_bgr is None or image_bgr.size == 0:
+        return []
+
+    if image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
+        raise ValueError(
+            "Gambar harus memiliki tiga channel warna (BGR)."
+        )
+
+    image_rgb = cv2.cvtColor(
+        image_bgr,
+        cv2.COLOR_BGR2RGB
+    )
+
+    mp_image = mp.Image(
+        image_format=mp.ImageFormat.SRGB,
+        data=np.ascontiguousarray(image_rgb)
+    )
+
+    result = face_landmarker.detect(mp_image)
+
+    if not result.face_landmarks:
+        return []
+
+    height, width = image_bgr.shape[:2]
+    all_landmarks = []
+
+    for face in result.face_landmarks:
+        points = np.array(
+            [
+                [
+                    landmark.x * width,
+                    landmark.y * height,
+                    landmark.z * width
+                ]
+                for landmark in face
+            ],
+            dtype=np.float32
+        )
+
+        if len(points) == 478:
+            all_landmarks.append(points)
+
+    return all_landmarks
+
 
 # =====================================================
 # HELPER ANTROPOMETRI
 # =====================================================
 def _eye_centers(lm):
     if len(lm) != 478:
-        raise ValueError("Diperlukan tepat 478 landmark.")
+        raise ValueError(
+            "Diperlukan tepat 478 landmark."
+        )
 
     return lm[468], lm[473]
 
@@ -59,17 +133,19 @@ def _dist(lm, a, b):
 
 
 # =====================================================
-# ANTROPOMETRI 22 FITUR
+# EKSTRAKSI ANTROPOMETRI 22 FITUR
 # =====================================================
 def extract_antropometri22(landmarks):
-    lm = landmarks
+    lm = np.asarray(landmarks, dtype=np.float32)
 
     if len(lm) != 478:
-        raise ValueError("Antropometri membutuhkan 478 landmark.")
+        raise ValueError(
+            "Antropometri membutuhkan 478 landmark."
+        )
 
     R, L = _eye_centers(lm)
 
-    return np.array(
+    features = np.array(
         [
             # 1. Mandible Width
             _dist(lm, 172, 397),
@@ -101,7 +177,7 @@ def extract_antropometri22(landmarks):
             _dist(lm, 33, 133),
             _dist(lm, 263, 362),
 
-            # 17-20. MRD (iris -> kelopak)
+            # 17-20. MRD (iris ke kelopak)
             _dist(lm, R, 159),
             _dist(lm, R, 145),
             _dist(lm, L, 386),
@@ -114,23 +190,30 @@ def extract_antropometri22(landmarks):
         dtype=np.float32
     )
 
+    return features
+
 
 # =====================================================
-# LBP
+# EKSTRAKSI FITUR LBP
 # =====================================================
 def _lbp_grid_hist(channel):
     lbp = local_binary_pattern(
-        channel, 8, 1, method="default"
+        channel,
+        P=8,
+        R=1,
+        method="default"
     )
 
-    h, w = channel.shape
+    height, width = channel.shape
     features = []
 
-    for r in range(3):
-        for c in range(3):
+    for row in range(3):
+        for col in range(3):
             cell = lbp[
-                r * h // 3:(r + 1) * h // 3,
-                c * w // 3:(c + 1) * w // 3
+                row * height // 3:
+                (row + 1) * height // 3,
+                col * width // 3:
+                (col + 1) * width // 3
             ]
 
             hist, _ = np.histogram(
@@ -141,39 +224,40 @@ def _lbp_grid_hist(channel):
 
             hist = hist.astype(np.float32)
             hist /= hist.sum() + 1e-6
+
             features.extend(hist)
 
     return features
 
 
 def extract_lbp(image):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    """
+    Input:
+        image: gambar OpenCV BGR.
 
-    return np.array(
+    Output:
+        Array LBP dengan 2304 fitur.
+    """
+    if image is None or image.size == 0:
+        raise ValueError(
+            "Gambar kosong atau tidak valid."
+        )
+
+    gray = cv2.cvtColor(
+        image,
+        cv2.COLOR_BGR2GRAY
+    )
+
+    features = np.array(
         _lbp_grid_hist(gray),
         dtype=np.float32
-    )  # 2304 fitur
+    )
+
+    return features
 
 
 # =====================================================
-# CONTOH PENGGUNAAN
+# TUTUP MODEL
 # =====================================================
-# image = cv2.imread("/kaggle/working/contoh.jpg")
-# landmarks = detect_landmarks(image)
-#
-# if landmarks:
-#     lm = landmarks[0]
-#     fitur22 = extract_antropometri22(lm)
-#     fitur_lbp = extract_lbp(image)
-#
-#     print("Jumlah landmark:", len(lm))
-#     print("Antropometri 22:", fitur22.shape)
-#     print("LBP:", fitur_lbp.shape)
-# else:
-#     print("Wajah tidak terdeteksi.")
-
-
-# =====================================================
-# TUTUP MODEL SETELAH SELESAI MEMPROSES SEMUA GAMBAR
-# =====================================================
-# face_landmarker.close()
+def close_face_landmarker():
+    face_landmarker.close()
