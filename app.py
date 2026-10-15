@@ -1,3 +1,4 @@
+
 import time
 import threading
 from pathlib import Path
@@ -5,7 +6,6 @@ from pathlib import Path
 import av
 import cv2
 import joblib
-import mediapipe as mp
 import numpy as np
 import streamlit as st
 from PIL import Image
@@ -29,7 +29,6 @@ BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "models"
 FACE_SIZE = (510, 510)
 
-# Nama tampilan -> (file SVM, file scaler, jenis fitur)
 MODEL_CONFIG = {
     "LBP": (
         "lbp_own_fair_svm.pkl",
@@ -42,19 +41,6 @@ MODEL_CONFIG = {
         "antro22",
     ),
 }
-
-
-# =====================================================
-# DETEKSI WAJAH UNTUK CROP
-# Menggunakan MediaPipe Face Detection untuk bounding box.
-# MediaPipe Tasks Face Landmarker dipakai di
-# feature_extraction.py untuk fitur antropometri.
-# =====================================================
-mp_face_detection = mp.solutions.face_detection
-face_detector = mp_face_detection.FaceDetection(
-    model_selection=1,
-    min_detection_confidence=0.5,
-)
 
 
 # =====================================================
@@ -87,61 +73,91 @@ def load_models():
 
 
 # =====================================================
-# DETEKSI DAN CROP SEMUA WAJAH
+# DETEKSI DAN CROP WAJAH
+# MEDIAPIPE TASKS FACE LANDMARKER
 # =====================================================
 def crop_all_faces(image_bgr):
+    """
+    Deteksi wajah memakai detect_landmarks() dari
+    feature_extraction.py, yang menggunakan FaceLandmarker
+    dari file models/face_landmarker.task.
+
+    Return:
+        [(face_crop, (x, y, width, height)), ...]
+    """
     if image_bgr is None or image_bgr.size == 0:
         return []
 
-    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    result = face_detector.process(image_rgb)
+    landmarks_list = detect_landmarks(image_bgr)
 
-    if not result.detections:
+    if landmarks_list is None or len(landmarks_list) == 0:
         return []
 
-    h, w = image_bgr.shape[:2]
+    image_h, image_w = image_bgr.shape[:2]
     cropped_faces = []
 
-    for detection in result.detections:
-        bbox = detection.location_data.relative_bounding_box
+    for landmarks in landmarks_list:
+        points = np.asarray(landmarks, dtype=np.float32)
 
-        x1 = max(0, int(bbox.xmin * w))
-        y1 = max(0, int(bbox.ymin * h))
-        x2 = min(w, int((bbox.xmin + bbox.width) * w))
-        y2 = min(h, int((bbox.ymin + bbox.height) * h))
-
-        bw = x2 - x1
-        bh = y2 - y1
-
-        if bw <= 0 or bh <= 0:
+        if (
+            points.ndim != 2
+            or points.shape[0] != 478
+            or points.shape[1] < 2
+        ):
             continue
 
-        margin_x = int(bw * 0.30)
-        margin_y = int(bh * 0.35)
-        cx = (x1 + x2) // 2
-        cy = (y1 + y2) // 2
-        size = max(bw + 2 * margin_x, bh + 2 * margin_y)
-        half = max(1, size // 2)
+        # Koordinat landmark dalam piksel
+        x_min = int(np.floor(np.min(points[:, 0])))
+        y_min = int(np.floor(np.min(points[:, 1])))
+        x_max = int(np.ceil(np.max(points[:, 0])))
+        y_max = int(np.ceil(np.max(points[:, 1])))
 
-        left = max(0, cx - half)
-        top = max(0, cy - half)
-        right = min(w, cx + half)
-        bottom = min(h, cy + half)
+        box_w = x_max - x_min
+        box_h = y_max - y_min
+
+        if box_w <= 0 or box_h <= 0:
+            continue
+
+        # Margin crop
+        margin_x = int(box_w * 0.30)
+        margin_y = int(box_h * 0.35)
+
+        left = max(0, x_min - margin_x)
+        top = max(0, y_min - margin_y)
+        right = min(image_w, x_max + margin_x)
+        bottom = min(image_h, y_max + margin_y)
+
+        if right <= left or bottom <= top:
+            continue
 
         face_crop = image_bgr[top:bottom, left:right]
 
-        if face_crop.size > 0:
-            cropped_faces.append(
-                (face_crop, (x1, y1, bw, bh))
+        if face_crop.size == 0:
+            continue
+
+        cropped_faces.append(
+            (
+                face_crop,
+                (
+                    left,
+                    top,
+                    right - left,
+                    bottom - top,
+                ),
             )
+        )
 
     return cropped_faces
 
 
 # =====================================================
-# PREPROCESSING TANPA REMOVE BACKGROUND
+# PREPROCESSING 510 x 510
+# TANPA REMOVE BACKGROUND
 # =====================================================
 def preprocess_face(image_bgr):
+    if image_bgr is None or image_bgr.size == 0:
+        raise ValueError("Crop wajah kosong.")
+
     return cv2.resize(
         image_bgr,
         FACE_SIZE,
@@ -157,14 +173,14 @@ def extract_features(image_bgr, feature_type):
         feature = extract_lbp(image_bgr)
 
     elif feature_type == "antro22":
-        # Sesuai signature detect_landmarks(image_bgr)
-        # di feature_extraction.py; tidak memakai mode="478".
-        landmarks = detect_landmarks(image_bgr)
+        landmarks_list = detect_landmarks(image_bgr)
 
-        if landmarks is None or len(landmarks) == 0:
+        if not landmarks_list:
             return None
 
-        feature = extract_antropometri22(landmarks[0])
+        feature = extract_antropometri22(
+            landmarks_list[0]
+        )
 
     else:
         raise ValueError(
@@ -174,11 +190,13 @@ def extract_features(image_bgr, feature_type):
     if feature is None:
         return None
 
-    return np.asarray(feature, dtype=np.float64).ravel()
+    return np.asarray(
+        feature, dtype=np.float64
+    ).ravel()
 
 
 # =====================================================
-# PREDIKSI
+# PREDIKSI SVM
 # =====================================================
 def predict(model_data, feature):
     model = model_data["model"]
@@ -188,13 +206,18 @@ def predict(model_data, feature):
         feature, dtype=np.float64
     ).reshape(1, -1)
 
-    expected = getattr(scaler, "n_features_in_", None)
+    expected = getattr(
+        scaler, "n_features_in_", None
+    )
 
-    if expected is not None and feature.shape[1] != expected:
-        return (
-            "Dimensi fitur tidak cocok "
-            f"({feature.shape[1]} fitur, scaler mengharapkan "
-            f"{expected})"
+    if (
+        expected is not None
+        and feature.shape[1] != expected
+    ):
+        raise ValueError(
+            f"Dimensi fitur tidak cocok: diperoleh "
+            f"{feature.shape[1]}, sedangkan scaler "
+            f"mengharapkan {expected} fitur."
         )
 
     scaled_feature = scaler.transform(feature)
@@ -241,22 +264,33 @@ class LiveProcessor(VideoProcessorBase):
 
             try:
                 feature_type = MODEL_CONFIG[model_name][2]
+                faces = crop_all_faces(image)
 
-                for face_crop, bbox in crop_all_faces(image):
+                for face_crop, bbox in faces:
                     resized_face = preprocess_face(face_crop)
+
                     feature = extract_features(
-                        resized_face, feature_type
+                        resized_face,
+                        feature_type,
                     )
 
                     if feature is None:
                         label = "Landmark gagal"
                     else:
-                        label = predict(model_data, feature)
+                        label = predict(
+                            model_data,
+                            feature,
+                        )
 
-                    if label.startswith("Dimensi fitur"):
-                        label = "Dimensi fitur salah"
+                    x, y, w, h = bbox
+                    new_results.append(
+                        (x, y, w, h, label)
+                    )
 
-                    new_results.append((*bbox, label))
+                if not new_results:
+                    new_results = [
+                        (10, 30, 0, 0, "Wajah tidak terdeteksi")
+                    ]
 
             except Exception as exc:
                 new_results = [
@@ -269,12 +303,12 @@ class LiveProcessor(VideoProcessorBase):
         with self.lock:
             results = list(self.results)
 
-        for x, y, bw, bh, label in results:
-            if bw > 0 and bh > 0:
+        for x, y, w, h, label in results:
+            if w > 0 and h > 0:
                 cv2.rectangle(
                     image,
                     (x, y),
-                    (x + bw, y + bh),
+                    (x + w, y + h),
                     (0, 255, 0),
                     2,
                 )
@@ -290,7 +324,8 @@ class LiveProcessor(VideoProcessorBase):
             )
 
         return av.VideoFrame.from_ndarray(
-            image, format="bgr24"
+            image,
+            format="bgr24",
         )
 
 
@@ -303,7 +338,9 @@ st.set_page_config(
 )
 
 st.title("Klasifikasi Etnis Berbasis Fitur Wajah")
-st.write("Perbandingan model SVM LBP dan Antropometri")
+st.write(
+    "Perbandingan model SVM LBP dan Antropometri"
+)
 
 try:
     models = load_models()
@@ -334,10 +371,17 @@ if option == "Upload Foto":
     )
 
     if uploaded_file is not None:
-        pil_image = Image.open(uploaded_file).convert("RGB")
-        image_bgr = cv2.cvtColor(
-            np.array(pil_image), cv2.COLOR_RGB2BGR
-        )
+        try:
+            pil_image = Image.open(
+                uploaded_file
+            ).convert("RGB")
+
+            image_bgr = cv2.cvtColor(
+                np.array(pil_image),
+                cv2.COLOR_RGB2BGR,
+            )
+        except Exception as exc:
+            st.error(f"Gagal membaca gambar: {exc}")
 
 
 # =====================================================
@@ -347,10 +391,17 @@ elif option == "Ambil Foto":
     camera_image = st.camera_input("Ambil foto")
 
     if camera_image is not None:
-        pil_image = Image.open(camera_image).convert("RGB")
-        image_bgr = cv2.cvtColor(
-            np.array(pil_image), cv2.COLOR_RGB2BGR
-        )
+        try:
+            pil_image = Image.open(
+                camera_image
+            ).convert("RGB")
+
+            image_bgr = cv2.cvtColor(
+                np.array(pil_image),
+                cv2.COLOR_RGB2BGR,
+            )
+        except Exception as exc:
+            st.error(f"Gagal membaca foto: {exc}")
 
 
 # =====================================================
@@ -362,7 +413,9 @@ else:
         list(MODEL_CONFIG.keys()),
     )
 
-    st.caption("Tekan START dan izinkan akses kamera.")
+    st.caption(
+        "Tekan START dan izinkan akses kamera."
+    )
 
     ctx = webrtc_streamer(
         key="live-webcam",
@@ -370,7 +423,11 @@ else:
         video_processor_factory=LiveProcessor,
         rtc_configuration={
             "iceServers": [
-                {"urls": ["stun:stun.l.google.com:19302"]}
+                {
+                    "urls": [
+                        "stun:stun.l.google.com:19302"
+                    ]
+                }
             ]
         },
         media_stream_constraints={
@@ -382,7 +439,8 @@ else:
 
     if ctx.video_processor:
         ctx.video_processor.set_model(
-            live_model, models[live_model]
+            live_model,
+            models[live_model],
         )
 
 
@@ -392,14 +450,25 @@ else:
 if image_bgr is not None:
     st.subheader("Citra Asli")
 
-    faces = crop_all_faces(image_bgr)
+    try:
+        faces = crop_all_faces(image_bgr)
+    except Exception as exc:
+        st.error(f"Deteksi wajah gagal: {exc}")
+        st.stop()
+
     vis_image = image_bgr.copy()
 
-    for idx, (_, (x, y, w, h)) in enumerate(faces, 1):
+    for idx, (_, bbox) in enumerate(faces, 1):
+        x, y, w, h = bbox
+
         cv2.rectangle(
-            vis_image, (x, y), (x + w, y + h),
-            (0, 255, 0), 2
+            vis_image,
+            (x, y),
+            (x + w, y + h),
+            (0, 255, 0),
+            2,
         )
+
         cv2.putText(
             vis_image,
             f"Wajah {idx}",
@@ -411,28 +480,38 @@ if image_bgr is not None:
         )
 
     st.image(
-        cv2.cvtColor(vis_image, cv2.COLOR_BGR2RGB),
+        cv2.cvtColor(
+            vis_image,
+            cv2.COLOR_BGR2RGB,
+        ),
+        caption="Hasil deteksi Face Landmarker",
         width=500,
     )
 
     if not faces:
-        st.error("Wajah tidak terdeteksi.")
+        st.warning(
+            "Wajah tidak terdeteksi oleh Face Landmarker."
+        )
         st.stop()
 
     st.success(f"Terdeteksi {len(faces)} wajah.")
 
-    tabs = st.tabs([
-        f"Wajah {i + 1}" for i in range(len(faces))
-    ])
+    tabs = st.tabs(
+        [f"Wajah {i + 1}" for i in range(len(faces))]
+    )
 
-    for idx, (face_crop, _) in enumerate(faces):
+    for idx, (face_crop, bbox) in enumerate(faces):
         with tabs[idx]:
-            col1, col2 = st.columns(2)
             resized_face = preprocess_face(face_crop)
+
+            col1, col2 = st.columns(2)
 
             with col1:
                 st.image(
-                    cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB),
+                    cv2.cvtColor(
+                        face_crop,
+                        cv2.COLOR_BGR2RGB,
+                    ),
                     caption="Crop wajah",
                     width=250,
                 )
@@ -440,7 +519,8 @@ if image_bgr is not None:
             with col2:
                 st.image(
                     cv2.cvtColor(
-                        resized_face, cv2.COLOR_BGR2RGB
+                        resized_face,
+                        cv2.COLOR_BGR2RGB,
                     ),
                     caption=(
                         "Preprocessing 510 × 510 "
@@ -450,28 +530,37 @@ if image_bgr is not None:
                 )
 
             st.subheader("Hasil Prediksi")
+
             columns = st.columns(2)
 
             for column, model_name in zip(
-                columns, MODEL_CONFIG.keys()
+                columns,
+                MODEL_CONFIG.keys(),
             ):
                 with column:
-                    feature_type = MODEL_CONFIG[model_name][2]
+                    feature_type = MODEL_CONFIG[
+                        model_name
+                    ][2]
 
                     try:
                         with st.spinner(
                             f"Menguji model {model_name}..."
                         ):
                             feature = extract_features(
-                                resized_face, feature_type
+                                resized_face,
+                                feature_type,
                             )
 
                             if feature is None:
-                                result = "Landmark gagal"
-                            else:
-                                result = predict(
-                                    models[model_name], feature
+                                st.warning(
+                                    "Landmark gagal dideteksi."
                                 )
+                                continue
+
+                            result = predict(
+                                models[model_name],
+                                feature,
+                            )
 
                         st.metric(
                             label=model_name,
@@ -479,4 +568,6 @@ if image_bgr is not None:
                         )
 
                     except Exception as exc:
-                        st.error(f"{model_name}: {exc}")
+                        st.error(
+                            f"{model_name}: {exc}"
+                        )
