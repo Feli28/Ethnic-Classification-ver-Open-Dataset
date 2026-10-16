@@ -216,12 +216,20 @@ def predict_lbp(image_bgr, model, scaler):
 def show_prediction(image_pil, method, models, mtcnn):
     antro_model, antro_scaler, lbp_model, lbp_scaler = models
 
+    # Tampilkan foto mirror
+    st.image(
+        image_pil,
+        caption="Foto mirror",
+        width=350,
+    )
+
     cropped_pil, error = crop_face_mtcnn(image_pil, mtcnn)
 
     if error:
         st.error(error)
         return
 
+    # Tampilkan hasil crop
     st.image(
         cropped_pil,
         caption="Hasil crop MTCNN (510 × 510)",
@@ -234,60 +242,170 @@ def show_prediction(image_pil, method, models, mtcnn):
     )
 
     if method == "Antropometri 22 Fitur":
-        prediction, confidence, features = predict_antro(
-            image_bgr,
-            antro_model,
-            antro_scaler,
+        prediction, _, _ = predict_antro(
+            image_bgr, antro_model, antro_scaler
         )
     else:
-        prediction, confidence, features = predict_lbp(
-            image_bgr,
-            lbp_model,
-            lbp_scaler,
+        prediction, _, _ = predict_lbp(
+            image_bgr, lbp_model, lbp_scaler
         )
 
     st.success(f"Hasil prediksi: {prediction}")
-    st.write(f"Metode: {method}")
-    st.write(f"Jumlah fitur: {len(features)}")
-
-    if confidence is not None:
-        st.write(
-            "Probabilitas kelas tertinggi: "
-            f"{confidence * 100:.2f}%"
-        )
-        st.caption(
-            "Probabilitas SVM bukan jaminan prediksi benar."
-        )
-
-    with st.expander("Lihat nilai fitur"):
-        st.write(features)
-
 
 # =========================================================
 # LIVE WEBCAM
 # =========================================================
 
 class WebcamProcessor(VideoProcessorBase):
-    """
-    Frame webcam di-flip horizontal.
-    Frame yang disimpan dan dikirim ke tampilan sama-sama mirror.
-    """
-
-    def __init__(self):
+    def __init__(self, models, mtcnn, method):
         self.lock = threading.Lock()
         self.latest_frame = None
+
+        self.models = models
+        self.mtcnn = mtcnn
+        self.method = method
+
+        self.frame_count = 0
+        self.last_box = None
+        self.last_prediction = None
+        self.last_error = None
 
     def recv(self, frame):
         image = frame.to_ndarray(format="bgr24")
 
-        # Flip horizontal sebelum disimpan dan ditampilkan.
-        mirrored_image = cv2.flip(image, 1)
+        # Flip horizontal untuk tampilan dan prediksi.
+        image = cv2.flip(image, 1)
+
+        self.frame_count += 1
+
+        # Jalankan deteksi dan prediksi setiap 10 frame.
+        # Frame lain tetap menampilkan hasil terakhir.
+        if self.frame_count % 10 == 1:
+            try:
+                image_rgb = cv2.cvtColor(
+                    image, cv2.COLOR_BGR2RGB
+                )
+                image_pil = Image.fromarray(image_rgb)
+
+                boxes, probs = self.mtcnn.detect(image_pil)
+
+                if (
+                    boxes is not None
+                    and probs is not None
+                    and len(boxes) > 0
+                    and probs[0] is not None
+                    and probs[0] > 0.95
+                ):
+                    x1, y1, x2, y2 = boxes[0]
+                    self.last_box = (
+                        int(x1), int(y1), int(x2), int(y2)
+                    )
+
+                    # Crop dan resize mengikuti preprocessing.
+                    cropped, error = crop_face_mtcnn(
+                        image_pil, self.mtcnn
+                    )
+
+                    if error:
+                        self.last_prediction = None
+                        self.last_error = error
+                    else:
+                        crop_bgr = cv2.cvtColor(
+                            np.asarray(cropped),
+                            cv2.COLOR_RGB2BGR,
+                        )
+
+                        antro_model, antro_scaler, lbp_model, lbp_scaler = (
+                            self.models
+                        )
+
+                        if self.method == "Antropometri 22 Fitur":
+                            prediction, _, _ = predict_antro(
+                                crop_bgr,
+                                antro_model,
+                                antro_scaler,
+                            )
+                        else:
+                            prediction, _, _ = predict_lbp(
+                                crop_bgr,
+                                lbp_model,
+                                lbp_scaler,
+                            )
+
+                        self.last_prediction = str(prediction)
+                        self.last_error = None
+                else:
+                    self.last_box = None
+                    self.last_prediction = None
+                    self.last_error = "Wajah belum terdeteksi"
+
+            except Exception as e:
+                self.last_error = str(e)
+
+        # Gambar bounding box pada frame video.
+        if self.last_box is not None:
+            x1, y1, x2, y2 = self.last_box
+
+            cv2.rectangle(
+                image,
+                (x1, y1),
+                (x2, y2),
+                (0, 255, 0),
+                2,
+            )
+
+            label = (
+                f"Prediksi: {self.last_prediction}"
+                if self.last_prediction
+                else "Memproses wajah..."
+            )
+
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            scale = 0.65
+            thickness = 2
+
+            (text_w, text_h), baseline = cv2.getTextSize(
+                label, font, scale, thickness
+            )
+
+            label_y = max(y1 - 10, text_h + 10)
+
+            cv2.rectangle(
+                image,
+                (x1, label_y - text_h - 8),
+                (x1 + text_w + 8, label_y + baseline),
+                (0, 180, 0),
+                -1,
+            )
+
+            cv2.putText(
+                image,
+                label,
+                (x1 + 4, label_y - 4),
+                font,
+                scale,
+                (255, 255, 255),
+                thickness,
+                cv2.LINE_AA,
+            )
+
+        elif self.last_error:
+            cv2.putText(
+                image,
+                self.last_error[:60],
+                (15, 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 0, 255),
+                2,
+                cv2.LINE_AA,
+            )
 
         with self.lock:
-            self.latest_frame = mirrored_image.copy()
+            self.latest_frame = image.copy()
 
         return av.VideoFrame.from_ndarray(
-            mirrored_image,
+            image,
             format="bgr24",
         )
 
@@ -295,9 +413,7 @@ class WebcamProcessor(VideoProcessorBase):
         with self.lock:
             if self.latest_frame is None:
                 return None
-
             return self.latest_frame.copy()
-
 
 # =========================================================
 # ANTARMUKA
@@ -424,15 +540,18 @@ elif source == "Ambil Foto":
 
 elif source == "Live Webcam":
     st.info(
-        "Izinkan akses kamera pada browser. "
-        "Frame akan di-mirror dan diprediksi otomatis "
-        "setiap sekitar 1 detik."
+        "Izinkan akses kamera. Wajah akan dideteksi dan "
+        "diprediksi otomatis saat video berjalan."
     )
 
     ctx = webrtc_streamer(
-        key="live-webcam",
+        key=f"live-webcam-{method}",
         mode=WebRtcMode.SENDRECV,
-        video_processor_factory=WebcamProcessor,
+        video_processor_factory=lambda: WebcamProcessor(
+            models,
+            mtcnn,
+            method,
+        ),
         media_stream_constraints={
             "video": True,
             "audio": False,
@@ -440,41 +559,10 @@ elif source == "Live Webcam":
         async_processing=True,
     )
 
-    if ctx.state.playing and ctx.video_processor:
-
-        @st.fragment(run_every="1s")
-        def live_prediction():
-            frame_bgr = ctx.video_processor.get_latest_frame()
-
-            if frame_bgr is None:
-                st.info("Menunggu frame webcam...")
-                return
-
-            # Frame sudah di-flip di WebcamProcessor.
-            frame_rgb = cv2.cvtColor(
-                frame_bgr,
-                cv2.COLOR_BGR2RGB,
-            )
-            image_pil = Image.fromarray(frame_rgb)
-
-            st.image(
-                image_pil,
-                caption="Frame mirror dari webcam",
-                width=350,
-            )
-
-            with st.spinner("Memproses frame webcam..."):
-                try:
-                    show_prediction(
-                        image_pil,
-                        method,
-                        models,
-                        mtcnn,
-                    )
-                except Exception as e:
-                    st.error(f"Gagal memprediksi frame: {e}")
-
-        live_prediction()
-
+    if ctx.state.playing:
+        st.caption(
+            "Bounding box hijau menandai wajah yang terdeteksi. "
+            "Label prediksi diperbarui secara berkala."
+        )
     else:
         st.caption("Webcam belum aktif.")
