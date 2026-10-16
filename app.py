@@ -213,7 +213,6 @@ def predict_lbp(image_bgr, model, scaler):
 # TAMPILKAN HASIL PREDIKSI
 # =========================================================
 
-```python
 def show_prediction(image_pil, method, models, mtcnn):
     antro_model, antro_scaler, lbp_model, lbp_scaler = models
 
@@ -250,7 +249,7 @@ def show_prediction(image_pil, method, models, mtcnn):
         )
 
     st.success(f"Hasil prediksi: {prediction}")
-```
+    
 # =========================================================
 # LIVE WEBCAM
 # =========================================================
@@ -524,7 +523,7 @@ elif source == "Ambil Foto":
 
         except Exception as e:
             st.error(f"Gagal memproses foto: {e}")
-            
+
 # =========================================================
 # LIVE WEBCAM — FLIP DAN PREDIKSI OTOMATIS
 # =========================================================
