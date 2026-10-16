@@ -1,6 +1,6 @@
 
 import os
-import pickle
+import joblib
 import threading
 from collections import deque
 
@@ -55,6 +55,7 @@ LBP_SCALER_PATH = os.path.join(
 # LOAD MODEL DAN MTCNN
 # =========================================================
 
+
 @st.cache_resource
 def load_models():
     paths = [
@@ -70,19 +71,23 @@ def load_models():
                 f"File tidak ditemukan: {path}"
             )
 
-    with open(ANTRO_MODEL_PATH, "rb") as f:
-        antro_model = pickle.load(f)
+        if os.path.getsize(path) == 0:
+            raise ValueError(
+                f"File model kosong: {path}"
+            )
 
-    with open(ANTRO_SCALER_PATH, "rb") as f:
-        antro_scaler = pickle.load(f)
+    antro_model = joblib.load(ANTRO_MODEL_PATH)
+    antro_scaler = joblib.load(ANTRO_SCALER_PATH)
 
-    with open(LBP_MODEL_PATH, "rb") as f:
-        lbp_model = pickle.load(f)
+    lbp_model = joblib.load(LBP_MODEL_PATH)
+    lbp_scaler = joblib.load(LBP_SCALER_PATH)
 
-    with open(LBP_SCALER_PATH, "rb") as f:
-        lbp_scaler = pickle.load(f)
-
-    return antro_model, antro_scaler, lbp_model, lbp_scaler
+    return (
+        antro_model,
+        antro_scaler,
+        lbp_model,
+        lbp_scaler,
+    )
 
 
 @st.cache_resource
@@ -92,7 +97,6 @@ def load_mtcnn():
         keep_all=False,
         device="cpu",
     )
-
 
 # =========================================================
 # PREPROCESSING MTCNN
