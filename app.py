@@ -213,26 +213,21 @@ def predict_lbp(image_bgr, model, scaler):
 # TAMPILKAN HASIL PREDIKSI
 # =========================================================
 
+```python
 def show_prediction(image_pil, method, models, mtcnn):
     antro_model, antro_scaler, lbp_model, lbp_scaler = models
 
-    # Tampilkan foto mirror
-    st.image(
-        image_pil,
-        caption="Foto mirror",
-        width=350,
-    )
-
+    # Input sudah di-flip sebelum masuk ke fungsi ini.
     cropped_pil, error = crop_face_mtcnn(image_pil, mtcnn)
 
     if error:
         st.error(error)
         return
 
-    # Tampilkan hasil crop
+    # Tampilkan hanya hasil crop MTCNN.
     st.image(
         cropped_pil,
-        caption="Hasil crop MTCNN (510 × 510)",
+        caption="Input wajah (MTCNN, 510 × 510)",
         width=350,
     )
 
@@ -243,15 +238,19 @@ def show_prediction(image_pil, method, models, mtcnn):
 
     if method == "Antropometri 22 Fitur":
         prediction, _, _ = predict_antro(
-            image_bgr, antro_model, antro_scaler
+            image_bgr,
+            antro_model,
+            antro_scaler,
         )
     else:
         prediction, _, _ = predict_lbp(
-            image_bgr, lbp_model, lbp_scaler
+            image_bgr,
+            lbp_model,
+            lbp_scaler,
         )
 
     st.success(f"Hasil prediksi: {prediction}")
-
+```
 # =========================================================
 # LIVE WEBCAM
 # =========================================================
@@ -497,23 +496,14 @@ elif source == "Ambil Foto":
         try:
             image_pil = Image.open(camera_image).convert("RGB")
 
-            # Flip horizontal setelah foto diambil.
+            # Flip horizontal sebelum crop MTCNN.
             image_pil = ImageOps.mirror(image_pil)
 
-            st.image(
-                image_pil,
-                caption="Foto mirror yang akan diprediksi",
-                width=350,
-            )
-
-            # Prediksi langsung tanpa tombol tambahan.
             image_hash = hashlib.md5(
                 camera_image.getvalue()
             ).hexdigest()
 
-            prediction_key = (
-                f"capture_{image_hash}_{method}"
-            )
+            prediction_key = f"capture_{image_hash}_{method}"
 
             if st.session_state.get("last_capture_key") != prediction_key:
                 with st.spinner("Memproses foto..."):
@@ -525,15 +515,16 @@ elif source == "Ambil Foto":
                     )
 
                 st.session_state["last_capture_key"] = prediction_key
+
             else:
                 st.info(
-                    "Foto ini sudah diproses. Ambil foto baru "
+                    "Foto sudah diproses. Ambil foto baru "
                     "untuk melakukan prediksi lagi."
                 )
 
         except Exception as e:
             st.error(f"Gagal memproses foto: {e}")
-
+            
 # =========================================================
 # LIVE WEBCAM — FLIP DAN PREDIKSI OTOMATIS
 # =========================================================
