@@ -38,10 +38,10 @@ MODEL_DIR = "models"
 IMAGE_SIZE = (510, 510)
 
 ANTRO_MODEL_PATH = os.path.join(
-    MODEL_DIR, "antro_own_fair_svm.pkl"
+    MODEL_DIR, "antro_own_fair_no_bg_svm.pkl"
 )
 ANTRO_SCALER_PATH = os.path.join(
-    MODEL_DIR, "antro_own_fair_scaler.pkl"
+    MODEL_DIR, "antro_own_fair_no_bg_scaler.pkl"
 )
 LBP_MODEL_PATH = os.path.join(
     MODEL_DIR, "lbp_own_fair_svm.pkl"
