@@ -1,15 +1,16 @@
-
+```python
 import os
 import joblib
 import threading
-from collections import deque
+import hashlib
 
+import av
 import cv2
 import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 
-from PIL import Image
+from PIL import Image, ImageOps
 from facenet_pytorch import MTCNN
 from streamlit_webrtc import (
     webrtc_streamer,
@@ -55,7 +56,6 @@ LBP_SCALER_PATH = os.path.join(
 # LOAD MODEL DAN MTCNN
 # =========================================================
 
-
 @st.cache_resource
 def load_models():
     paths = [
@@ -76,40 +76,27 @@ def load_models():
                 f"File model kosong: {path}"
             )
 
-    antro_model = joblib.load(ANTRO_MODEL_PATH)
-    antro_scaler = joblib.load(ANTRO_SCALER_PATH)
-
-    lbp_model = joblib.load(LBP_MODEL_PATH)
-    lbp_scaler = joblib.load(LBP_SCALER_PATH)
-
     return (
-        antro_model,
-        antro_scaler,
-        lbp_model,
-        lbp_scaler,
+        joblib.load(ANTRO_MODEL_PATH),
+        joblib.load(ANTRO_SCALER_PATH),
+        joblib.load(LBP_MODEL_PATH),
+        joblib.load(LBP_SCALER_PATH),
     )
 
 
 @st.cache_resource
 def load_mtcnn():
-    # Samakan parameter MTCNN dengan preprocessing training.
     return MTCNN(
         keep_all=False,
         device="cpu",
     )
+
 
 # =========================================================
 # PREPROCESSING MTCNN
 # =========================================================
 
 def crop_face_mtcnn(image_pil, mtcnn):
-    """
-    Mengikuti aturan crop yang diberikan:
-    confidence > 0.95,
-    pusat crop bergeser ke bawah 5% tinggi box,
-    sisi crop = 95% dari max(lebar, tinggi),
-    resize 510x510 dengan LANCZOS.
-    """
     image_pil = image_pil.convert("RGB")
     img_w, img_h = image_pil.size
 
@@ -119,7 +106,9 @@ def crop_face_mtcnn(image_pil, mtcnn):
         return None, "Wajah tidak terdeteksi oleh MTCNN."
 
     if probs[0] is None or probs[0] <= 0.95:
-        return None, "Confidence deteksi wajah harus lebih dari 0.95."
+        return None, (
+            "Confidence deteksi wajah harus lebih dari 0.95."
+        )
 
     x1, y1, x2, y2 = boxes[0]
 
@@ -169,6 +158,7 @@ def predict_antro(image_bgr, model, scaler):
         )
 
     landmarks = landmarks_list[0]
+
     features = np.asarray(
         extract_antropometri22(landmarks),
         dtype=np.float32,
@@ -184,6 +174,7 @@ def predict_antro(image_bgr, model, scaler):
     prediction = model.predict(X_scaled)[0]
 
     confidence = None
+
     if hasattr(model, "predict_proba"):
         probabilities = model.predict_proba(X_scaled)[0]
         confidence = float(np.max(probabilities))
@@ -211,6 +202,7 @@ def predict_lbp(image_bgr, model, scaler):
     prediction = model.predict(X_scaled)[0]
 
     confidence = None
+
     if hasattr(model, "predict_proba"):
         probabilities = model.predict_proba(X_scaled)[0]
         confidence = float(np.max(probabilities))
@@ -219,40 +211,10 @@ def predict_lbp(image_bgr, model, scaler):
 
 
 # =========================================================
-# LIVE WEBCAM
+# TAMPILKAN HASIL PREDIKSI
 # =========================================================
 
-class WebcamProcessor(VideoProcessorBase):
-    """
-    Menyimpan frame webcam terbaru agar bisa digunakan
-    ketika pengguna menekan tombol Prediksi.
-    """
-
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.latest_frame = None
-        self.frames = deque(maxlen=1)
-
-    def recv(self, frame):
-        image = frame.to_ndarray(format="bgr24")
-
-        with self.lock:
-            self.latest_frame = image.copy()
-
-        return frame
-
-    def get_latest_frame(self):
-        with self.lock:
-            if self.latest_frame is None:
-                return None
-            return self.latest_frame.copy()
-
-
-# =========================================================
-# FUNGSI TAMPILKAN HASIL
-# =========================================================
-
-def process_image(image_pil, method, models, mtcnn):
+def show_prediction(image_pil, method, models, mtcnn):
     antro_model, antro_scaler, lbp_model, lbp_scaler = models
 
     cropped_pil, error = crop_face_mtcnn(image_pil, mtcnn)
@@ -291,15 +253,51 @@ def process_image(image_pil, method, models, mtcnn):
 
     if confidence is not None:
         st.write(
-            f"Probabilitas kelas tertinggi: "
+            "Probabilitas kelas tertinggi: "
             f"{confidence * 100:.2f}%"
         )
         st.caption(
-            "Nilai probabilitas SVM bukan jaminan bahwa prediksi benar."
+            "Probabilitas SVM bukan jaminan prediksi benar."
         )
 
     with st.expander("Lihat nilai fitur"):
         st.write(features)
+
+
+# =========================================================
+# LIVE WEBCAM
+# =========================================================
+
+class WebcamProcessor(VideoProcessorBase):
+    """
+    Frame webcam di-flip horizontal.
+    Frame yang disimpan dan dikirim ke tampilan sama-sama mirror.
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.latest_frame = None
+
+    def recv(self, frame):
+        image = frame.to_ndarray(format="bgr24")
+
+        # Flip horizontal sebelum disimpan dan ditampilkan.
+        mirrored_image = cv2.flip(image, 1)
+
+        with self.lock:
+            self.latest_frame = mirrored_image.copy()
+
+        return av.VideoFrame.from_ndarray(
+            mirrored_image,
+            format="bgr24",
+        )
+
+    def get_latest_frame(self):
+        with self.lock:
+            if self.latest_frame is None:
+                return None
+
+            return self.latest_frame.copy()
 
 
 # =========================================================
@@ -324,7 +322,6 @@ source = st.radio(
     horizontal=True,
 )
 
-# Load resources saat dibutuhkan.
 try:
     models = load_models()
     mtcnn = load_mtcnn()
@@ -333,9 +330,9 @@ except Exception as e:
     st.stop()
 
 
-# ---------------------------------------------------------
-# UPLOAD GAMBAR
-# ---------------------------------------------------------
+# =========================================================
+# UPLOAD GAMBAR — TANPA FLIP
+# =========================================================
 
 if source == "Upload Gambar":
     uploaded_file = st.file_uploader(
@@ -360,17 +357,20 @@ if source == "Upload Gambar":
                 key="predict_upload",
             ):
                 with st.spinner("Memproses gambar..."):
-                    process_image(
-                        image_pil, method, models, mtcnn
+                    show_prediction(
+                        image_pil,
+                        method,
+                        models,
+                        mtcnn,
                     )
 
         except Exception as e:
             st.error(f"Gagal membaca gambar: {e}")
 
 
-# ---------------------------------------------------------
-# AMBIL FOTO LANGSUNG
-# ---------------------------------------------------------
+# =========================================================
+# AMBIL FOTO — FLIP DAN PREDIKSI OTOMATIS
+# =========================================================
 
 elif source == "Ambil Foto":
     camera_image = st.camera_input(
@@ -382,29 +382,53 @@ elif source == "Ambil Foto":
         try:
             image_pil = Image.open(camera_image).convert("RGB")
 
-            if st.button(
-                "Prediksi",
-                type="primary",
-                key="predict_capture",
-            ):
+            # Flip horizontal setelah foto diambil.
+            image_pil = ImageOps.mirror(image_pil)
+
+            st.image(
+                image_pil,
+                caption="Foto mirror yang akan diprediksi",
+                width=350,
+            )
+
+            # Prediksi langsung tanpa tombol tambahan.
+            image_hash = hashlib.md5(
+                camera_image.getvalue()
+            ).hexdigest()
+
+            prediction_key = (
+                f"capture_{image_hash}_{method}"
+            )
+
+            if st.session_state.get("last_capture_key") != prediction_key:
                 with st.spinner("Memproses foto..."):
-                    process_image(
-                        image_pil, method, models, mtcnn
+                    show_prediction(
+                        image_pil,
+                        method,
+                        models,
+                        mtcnn,
                     )
+
+                st.session_state["last_capture_key"] = prediction_key
+            else:
+                st.info(
+                    "Foto ini sudah diproses. Ambil foto baru "
+                    "untuk melakukan prediksi lagi."
+                )
 
         except Exception as e:
             st.error(f"Gagal memproses foto: {e}")
 
 
-# ---------------------------------------------------------
-# LIVE WEBCAM
-# ---------------------------------------------------------
+# =========================================================
+# LIVE WEBCAM — FLIP DAN PREDIKSI OTOMATIS
+# =========================================================
 
 elif source == "Live Webcam":
     st.info(
         "Izinkan akses kamera pada browser. "
-        "Tunggu sampai video muncul, lalu tekan Prediksi "
-        "untuk memproses frame terbaru."
+        "Frame akan di-mirror dan diprediksi otomatis "
+        "setiap sekitar 1 detik."
     )
 
     ctx = webrtc_streamer(
@@ -419,33 +443,41 @@ elif source == "Live Webcam":
     )
 
     if ctx.state.playing and ctx.video_processor:
-        if st.button(
-            "Prediksi Frame Webcam",
-            type="primary",
-            key="predict_webcam",
-        ):
+
+        @st.fragment(run_every="1s")
+        def live_prediction():
             frame_bgr = ctx.video_processor.get_latest_frame()
 
             if frame_bgr is None:
-                st.warning(
-                    "Frame belum tersedia. Pastikan webcam aktif."
-                )
-            else:
-                frame_rgb = cv2.cvtColor(
-                    frame_bgr,
-                    cv2.COLOR_BGR2RGB,
-                )
-                image_pil = Image.fromarray(frame_rgb)
+                st.info("Menunggu frame webcam...")
+                return
 
-                st.image(
-                    image_pil,
-                    caption="Frame yang akan diproses",
-                    use_container_width=True,
-                )
+            # Frame sudah di-flip di WebcamProcessor.
+            frame_rgb = cv2.cvtColor(
+                frame_bgr,
+                cv2.COLOR_BGR2RGB,
+            )
+            image_pil = Image.fromarray(frame_rgb)
 
-                with st.spinner("Memproses frame webcam..."):
-                    process_image(
-                        image_pil, method, models, mtcnn
+            st.image(
+                image_pil,
+                caption="Frame mirror dari webcam",
+                width=350,
+            )
+
+            with st.spinner("Memproses frame webcam..."):
+                try:
+                    show_prediction(
+                        image_pil,
+                        method,
+                        models,
+                        mtcnn,
                     )
+                except Exception as e:
+                    st.error(f"Gagal memprediksi frame: {e}")
+
+        live_prediction()
+
     else:
         st.caption("Webcam belum aktif.")
+```
