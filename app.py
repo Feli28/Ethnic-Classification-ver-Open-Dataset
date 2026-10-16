@@ -1,4 +1,3 @@
-```python
 import os
 import joblib
 import threading
@@ -419,7 +418,6 @@ elif source == "Ambil Foto":
         except Exception as e:
             st.error(f"Gagal memproses foto: {e}")
 
-
 # =========================================================
 # LIVE WEBCAM — FLIP DAN PREDIKSI OTOMATIS
 # =========================================================
@@ -480,4 +478,3 @@ elif source == "Live Webcam":
 
     else:
         st.caption("Webcam belum aktif.")
-```
