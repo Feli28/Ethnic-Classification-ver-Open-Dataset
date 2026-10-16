@@ -1,85 +1,130 @@
 
 import cv2
 import numpy as np
-from pathlib import Path
 import mediapipe as mp
+
+from skimage.feature import local_binary_pattern
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-from skimage.feature import local_binary_pattern
 
 
-# =====================================================
-# PATH MODEL FACE LANDMARKER
-# =====================================================
-BASE_DIR = Path(__file__).resolve().parent
-MODEL_PATH = BASE_DIR / "models" / "face_landmarker.task"
+# ============================================================
+# 1. KONFIGURASI MEDIAPIPE FACE LANDMARKER
+# ============================================================
 
+MODEL_PATH = "models/face_landmarker.task"
 
-# =====================================================
-# VALIDASI FILE MODEL
-# =====================================================
-if not MODEL_PATH.is_file():
-    raise FileNotFoundError(
-        f"Model Face Landmarker tidak ditemukan: {MODEL_PATH}"
-    )
-
-
-# =====================================================
-# MEDIAPIPE TASKS - FACE LANDMARKER
-# =====================================================
-base_options = python.BaseOptions(
-    model_asset_path=str(MODEL_PATH)
-)
+BaseOptions = python.BaseOptions
 
 options = vision.FaceLandmarkerOptions(
-    base_options=base_options,
+    base_options=BaseOptions(
+        model_asset_path=MODEL_PATH
+    ),
     running_mode=vision.RunningMode.IMAGE,
     num_faces=1,
     min_face_detection_confidence=0.5,
-    min_face_presence_confidence=0.5,
-    output_face_blendshapes=False,
-    output_facial_transformation_matrixes=False
+    min_face_presence_confidence=0.5
+)
+
+face_landmarker = vision.FaceLandmarker.create_from_options(
+    options
 )
 
 
-# =====================================================
-# INISIALISASI FACE LANDMARKER
-# =====================================================
-try:
-    face_landmarker = vision.FaceLandmarker.create_from_options(
-        options
-    )
-except Exception as e:
-    raise RuntimeError(
-        "Gagal menginisialisasi MediaPipe Face Landmarker. "
-        f"{type(e).__name__}: {e}"
-    ) from e
+# ============================================================
+# 2. PASANGAN LANDMARK UNTUK 22 FITUR ANTROPOMETRI
+#    Urutan mengikuti kode training
+# ============================================================
+
+LANDMARK_PAIRS = [
+    (172, 397),  # Mandible Width
+    (0, 14),     # Upper Vermilion Height
+    (14, 17),    # Lower Vermilion Height
+    (468, 473),  # Interpupillary Distance (IPD)
+    (133, 362),  # Intercanthal Width
+    (33, 263),   # Biocular Width
+    (98, 327),   # Nasal Width
+    (168, 2),    # Nasal Height
+    (168, 4),    # Nasal Length
+    (61, 291),   # Mouth Width
+    (168, 152),  # Morphological Facial Height
+    (2, 152),    # Lower Facial Height
+    (159, 145),  # PFH Left
+    (386, 374),  # PFH Right
+    (33, 133),   # HPA Left
+    (263, 362),  # HPA Right
+    (468, 159),  # Approx MRD1 Left
+    (468, 145),  # Approx MRD2 Left
+    (473, 386),  # Approx MRD1 Right
+    (473, 374),  # Approx MRD2 Right
+    (37, 267),   # Approx Philtrum Width
+    (2, 0)       # Approx Philtrum Height
+]
 
 
-# =====================================================
-# DETEKSI LANDMARK WAJAH
-# =====================================================
+ANTHROPOMETRY_FEATURE_NAMES = [
+    "Mandible Width",
+    "Upper Vermilion Height",
+    "Lower Vermilion Height",
+    "Interpupillary Distance (IPD)",
+    "Intercanthal Width",
+    "Biocular Width",
+    "Nasal Width",
+    "Nasal Height",
+    "Nasal Length",
+    "Mouth Width",
+    "Morphological Facial Height",
+    "Lower Facial Height",
+    "PFH Left",
+    "PFH Right",
+    "HPA Left",
+    "HPA Right",
+    "Approx MRD1 Left",
+    "Approx MRD2 Left",
+    "Approx MRD1 Right",
+    "Approx MRD2 Right",
+    "Approx Philtrum Width",
+    "Approx Philtrum Height"
+]
+
+
+# ============================================================
+# 3. DETEKSI LANDMARK
+# ============================================================
+
 def detect_landmarks(image_bgr):
     """
-    Input:
-        image_bgr: gambar OpenCV dalam format BGR.
+    Mendeteksi landmark wajah menggunakan MediaPipe Tasks.
 
-    Output:
-        List berisi array landmark berukuran (478, 3).
-        Mengembalikan list kosong jika wajah tidak terdeteksi.
+    Parameter:
+        image_bgr: citra OpenCV dalam format BGR.
+
+    Return:
+        List berisi array landmark berbentuk (478, 3).
+        Koordinat x dan y dikonversi ke piksel.
+        Koordinat z disimpan, tetapi tidak digunakan
+        untuk menghitung fitur antropometri.
     """
-    if image_bgr is None or image_bgr.size == 0:
+
+    if image_bgr is None:
         return []
+
+    if not isinstance(image_bgr, np.ndarray):
+        raise TypeError(
+            "image_bgr harus berupa numpy.ndarray."
+        )
 
     if image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
         raise ValueError(
-            "Gambar harus memiliki tiga channel warna (BGR)."
+            "Gambar harus memiliki tiga channel warna."
         )
 
     image_rgb = cv2.cvtColor(
         image_bgr,
         cv2.COLOR_BGR2RGB
     )
+
+    height, width = image_rgb.shape[:2]
 
     mp_image = mp.Image(
         image_format=mp.ImageFormat.SRGB,
@@ -91,7 +136,6 @@ def detect_landmarks(image_bgr):
     if not result.face_landmarks:
         return []
 
-    height, width = image_bgr.shape[:2]
     all_landmarks = []
 
     for face in result.face_landmarks:
@@ -107,157 +151,188 @@ def detect_landmarks(image_bgr):
             dtype=np.float32
         )
 
-        if len(points) == 478:
-            all_landmarks.append(points)
+        if points.shape != (478, 3):
+            continue
+
+        all_landmarks.append(points)
 
     return all_landmarks
 
 
-# =====================================================
-# HELPER ANTROPOMETRI
-# =====================================================
-def _eye_centers(lm):
-    if len(lm) != 478:
-        raise ValueError(
-            "Diperlukan tepat 478 landmark."
-        )
+# ============================================================
+# 4. EKSTRAKSI 22 FITUR ANTROPOMETRI
+# ============================================================
 
-    return lm[468], lm[473]
-
-
-def _dist(lm, a, b):
-    pa = lm[a] if isinstance(a, (int, np.integer)) else a
-    pb = lm[b] if isinstance(b, (int, np.integer)) else b
-
-    return np.linalg.norm(pa - pb)
-
-
-# =====================================================
-# EKSTRAKSI ANTROPOMETRI 22 FITUR
-# =====================================================
 def extract_antropometri22(landmarks):
-    lm = np.asarray(landmarks, dtype=np.float32)
+    """
+    Menghitung 22 fitur antropometri menggunakan jarak
+    Euclidean 2D dalam koordinat piksel.
 
-    if len(lm) != 478:
-        raise ValueError(
-            "Antropometri membutuhkan 478 landmark."
-        )
+    Urutan pasangan mengikuti kode training.
+    Koordinat z tidak digunakan.
+    
+    Parameter:
+        landmarks: array dengan bentuk (478, 3).
 
-    R, L = _eye_centers(lm)
+    Return:
+        Array float32 dengan bentuk (22,).
+    """
 
-    features = np.array(
-        [
-            # 1. Mandible Width
-            _dist(lm, 172, 397),
-
-            # 2-3. Lip
-            _dist(lm, 0, 14),
-            _dist(lm, 14, 17),
-
-            # 4-6. Eye
-            _dist(lm, R, L),
-            _dist(lm, 133, 362),
-            _dist(lm, 33, 263),
-
-            # 7-9. Nose
-            _dist(lm, 98, 327),
-            _dist(lm, 168, 2),
-            _dist(lm, 168, 4),
-
-            # 10. Mouth
-            _dist(lm, 61, 291),
-
-            # 11-12. Face proportion
-            _dist(lm, 168, 152),
-            _dist(lm, 2, 152),
-
-            # 13-16. Eye opening
-            _dist(lm, 159, 145),
-            _dist(lm, 386, 374),
-            _dist(lm, 33, 133),
-            _dist(lm, 263, 362),
-
-            # 17-20. MRD (iris ke kelopak)
-            _dist(lm, R, 159),
-            _dist(lm, R, 145),
-            _dist(lm, L, 386),
-            _dist(lm, L, 374),
-
-            # 21-22. Philtrum
-            _dist(lm, 2, 0),
-            _dist(lm, 37, 267),
-        ],
+    landmarks = np.asarray(
+        landmarks,
         dtype=np.float32
     )
+
+    if landmarks.shape != (478, 3):
+        raise ValueError(
+            "Landmark harus berukuran (478, 3), "
+            f"tetapi diperoleh {landmarks.shape}."
+        )
+
+    if not np.isfinite(landmarks).all():
+        raise ValueError(
+            "Landmark mengandung nilai NaN atau tak hingga."
+        )
+
+    features = []
+
+    for idx1, idx2 in LANDMARK_PAIRS:
+        point1 = landmarks[idx1, :2]
+        point2 = landmarks[idx2, :2]
+
+        distance = np.linalg.norm(
+            point1 - point2
+        )
+
+        features.append(float(distance))
+
+    features = np.asarray(
+        features,
+        dtype=np.float32
+    )
+
+    if features.shape != (22,):
+        raise ValueError(
+            f"Jumlah fitur antropometri tidak sesuai: "
+            f"{features.shape}."
+        )
 
     return features
 
 
-# =====================================================
-# EKSTRAKSI FITUR LBP
-# =====================================================
-def _lbp_grid_hist(channel):
-    lbp = local_binary_pattern(
-        channel,
-        P=8,
-        R=1,
+# ============================================================
+# 5. EKSTRAKSI PURE LBP GRID 3x3
+# ============================================================
+
+def extract_lbp(image_bgr):
+    """
+    Ekstraksi Pure LBP dengan konfigurasi training:
+        P = 8
+        R = 1
+        method = default
+        Grid = 3x3
+        Histogram = 256 bin per cell
+        Normalisasi = hist / (hist.sum() + 1e-6)
+
+    Return:
+        Array float32 dengan bentuk (2304,).
+    """
+
+    if image_bgr is None:
+        raise ValueError(
+            "Gambar tidak valid atau kosong."
+        )
+
+    if not isinstance(image_bgr, np.ndarray):
+        raise TypeError(
+            "image_bgr harus berupa numpy.ndarray."
+        )
+
+    if image_bgr.ndim != 3 or image_bgr.shape[2] != 3:
+        raise ValueError(
+            "Gambar harus memiliki tiga channel warna."
+        )
+
+    image_gray = cv2.cvtColor(
+        image_bgr,
+        cv2.COLOR_BGR2GRAY
+    )
+
+    height, width = image_gray.shape
+
+    GRID_ROWS = 3
+    GRID_COLS = 3
+    RADIUS = 1
+    N_POINTS = 8 * RADIUS
+    NUM_BINS = 256
+
+    if height < GRID_ROWS or width < GRID_COLS:
+        raise ValueError(
+            "Ukuran gambar terlalu kecil untuk grid 3x3."
+        )
+
+    lbp_matrix = local_binary_pattern(
+        image_gray,
+        N_POINTS,
+        RADIUS,
         method="default"
     )
 
-    height, width = channel.shape
     features = []
 
-    for row in range(3):
-        for col in range(3):
-            cell = lbp[
-                row * height // 3:
-                (row + 1) * height // 3,
-                col * width // 3:
-                (col + 1) * width // 3
+    for row in range(GRID_ROWS):
+        y_start = row * height // GRID_ROWS
+        y_end = (row + 1) * height // GRID_ROWS
+
+        for col in range(GRID_COLS):
+            x_start = col * width // GRID_COLS
+            x_end = (col + 1) * width // GRID_COLS
+
+            cell = lbp_matrix[
+                y_start:y_end,
+                x_start:x_end
             ]
 
             hist, _ = np.histogram(
                 cell.ravel(),
-                bins=256,
+                bins=NUM_BINS,
                 range=(0, 256)
             )
 
             hist = hist.astype(np.float32)
-            hist /= hist.sum() + 1e-6
+
+            hist /= (
+                hist.sum() + 1e-6
+            )
 
             features.extend(hist)
 
-    return features
-
-
-def extract_lbp(image):
-    """
-    Input:
-        image: gambar OpenCV BGR.
-
-    Output:
-        Array LBP dengan 2304 fitur.
-    """
-    if image is None or image.size == 0:
-        raise ValueError(
-            "Gambar kosong atau tidak valid."
-        )
-
-    gray = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2GRAY
-    )
-
-    features = np.array(
-        _lbp_grid_hist(gray),
+    features = np.asarray(
+        features,
         dtype=np.float32
     )
 
+    if features.shape != (2304,):
+        raise ValueError(
+            f"Jumlah fitur LBP tidak sesuai: "
+            f"{features.shape}."
+        )
+
     return features
 
 
-# =====================================================
-# TUTUP MODEL
-# =====================================================
+# ============================================================
+# 6. MENUTUP MEDIAPIPE FACE LANDMARKER
+# ============================================================
+
 def close_face_landmarker():
-    face_landmarker.close()
+    """
+    Menutup resource MediaPipe.
+    Panggil saat resource tidak lagi digunakan.
+    """
+
+    global face_landmarker
+
+    if face_landmarker is not None:
+        face_landmarker.close()
+        face_landmarker = None

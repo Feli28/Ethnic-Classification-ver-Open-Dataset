@@ -1,11 +1,12 @@
-
 streamlit
 streamlit-webrtc
-opencv-python-headless
+opencv-python
 numpy
 Pillow
-mediapipe==0.10.13
 scikit-image
 scikit-learn
-joblib
+mediapipe==0.10.21
+facenet-pytorch
+torch
+torchvision
 av
