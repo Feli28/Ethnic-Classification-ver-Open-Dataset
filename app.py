@@ -10,6 +10,7 @@ import streamlit as st
 from PIL import Image, ImageOps
 from facenet_pytorch import MTCNN
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, VideoProcessorBase
+from io import BytesIO
 
 from feature_extraction import (
     detect_landmarks,
@@ -38,6 +39,30 @@ ANTRO_SCALER_PATH = MODEL_DIR / "antro_own_fair_resize_no_bg_scaler.pkl"
 LBP_MODEL_PATH = MODEL_DIR / "lbp_own_fair_resize_svm.pkl"
 LBP_SCALER_PATH = MODEL_DIR / "lbp_own_fair_resize_scaler.pkl"
 
+
+def show_png(image, caption=None):
+    buffer = BytesIO()
+
+    if isinstance(image, Image.Image):
+        image = image.convert("RGB")
+        image.save(buffer, format="PNG")
+    else:
+        image = np.asarray(image)
+
+        if image.ndim == 3 and image.shape[2] == 3:
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        Image.fromarray(image.astype(np.uint8)).save(
+            buffer, format="PNG"
+        )
+
+    st.image(
+        buffer.getvalue(),
+        caption=caption,
+        output_format="PNG",
+        use_container_width=True,
+    )
 
 # =========================================================
 # 2. LOAD MODELS AND MTCNN
@@ -265,12 +290,15 @@ def show_face_results(results):
         col_image, col_result = st.columns([1, 2])
 
         with col_image:
+
             if result["crop"] is not None:
                 st.image(
-                    result["crop"],
+                    result["crop"].convert("RGB"),
                     caption="Crop wajah (510 × 510)",
+                    output_format="PNG",
                     use_container_width=True,
                 )
+
 
         with col_result:
             st.caption(
@@ -436,6 +464,7 @@ if source == "Upload Gambar":
 # ---------------------------------------------------------
 # TAKE PHOTO: foto otomatis di-flip dan langsung diprediksi
 # ---------------------------------------------------------
+
 elif source == "Ambil Foto":
     camera_image = st.camera_input(
         "Ambil foto menggunakan kamera",
@@ -448,12 +477,13 @@ elif source == "Ambil Foto":
                 Image.open(camera_image)
             ).convert("RGB")
 
-            # Flip horizontal agar foto yang diproses tidak mirror.
+            # Flip horizontal satu kali.
             image_pil = ImageOps.mirror(image_pil)
 
             st.image(
                 image_pil,
                 caption="Foto setelah flip horizontal",
+                output_format="PNG",
                 use_container_width=True,
             )
 
@@ -461,11 +491,14 @@ elif source == "Ambil Foto":
                 results = predict_faces(image_pil, method, models, mtcnn)
 
             if results:
+                annotated_image = draw_face_boxes(image_pil, results)
                 st.image(
-                    draw_face_boxes(image_pil, results),
+                    annotated_image,
                     caption="Deteksi wajah dan hasil prediksi",
+                    output_format="PNG",
                     use_container_width=True,
                 )
+
             show_face_results(results)
 
         except Exception as exc:
