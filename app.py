@@ -41,28 +41,39 @@ LBP_SCALER_PATH = MODEL_DIR / "lbp_own_fair_resize_scaler.pkl"
 
 
 def show_png(image, caption=None):
+    """Tampilkan gambar PIL atau array NumPy RGB sebagai PNG agar konsisten."""
     buffer = BytesIO()
 
     if isinstance(image, Image.Image):
-        image = image.convert("RGB")
-        image.save(buffer, format="PNG")
+        pil_image = image.convert("RGB")
     else:
-        image = np.asarray(image)
+        image_array = np.asarray(image)
 
-        if image.ndim == 3 and image.shape[2] == 3:
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        if image_array.dtype != np.uint8:
+            image_array = np.clip(image_array, 0, 255).astype(np.uint8)
 
-        Image.fromarray(image.astype(np.uint8)).save(
-            buffer, format="PNG"
-        )
+        # draw_face_boxes() menghasilkan array RGB, jadi jangan dibalik lagi.
+        if image_array.ndim == 2:
+            pil_image = Image.fromarray(image_array)
+        elif image_array.ndim == 3 and image_array.shape[2] in (3, 4):
+            pil_image = Image.fromarray(image_array)
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
+        else:
+            raise ValueError(
+                f"Format gambar tidak didukung: shape={image_array.shape}"
+            )
+
+    pil_image.save(buffer, format="PNG")
+    image_bytes = buffer.getvalue()
 
     st.image(
-        buffer.getvalue(),
+        image_bytes,
         caption=caption,
         output_format="PNG",
         use_container_width=True,
     )
+
 
 # =========================================================
 # 2. LOAD MODELS AND MTCNN
@@ -292,12 +303,7 @@ def show_face_results(results):
         with col_image:
 
             if result["crop"] is not None:
-                st.image(
-                    result["crop"].convert("RGB"),
-                    caption="Crop wajah (510 × 510)",
-                    output_format="PNG",
-                    use_container_width=True,
-                )
+                show_png(result["crop"], "Crop wajah (510 × 510)")
 
 
         with col_result:
@@ -444,17 +450,16 @@ if source == "Upload Gambar":
             image_pil = ImageOps.exif_transpose(
                 Image.open(uploaded_file)
             ).convert("RGB")
-            st.image(image_pil, caption="Gambar asli", use_container_width=True)
+            show_png(image_pil, "Gambar asli")
 
             if st.button("Prediksi", type="primary", key="predict_upload"):
                 with st.spinner("Mendeteksi dan memprediksi semua wajah..."):
                     results = predict_faces(image_pil, method, models, mtcnn)
 
                 if results:
-                    st.image(
+                    show_png(
                         draw_face_boxes(image_pil, results),
-                        caption="Deteksi wajah dan hasil prediksi",
-                        use_container_width=True,
+                        "Deteksi wajah dan hasil prediksi",
                     )
                 show_face_results(results)
         except Exception as exc:
@@ -480,24 +485,14 @@ elif source == "Ambil Foto":
             # Flip horizontal satu kali.
             image_pil = ImageOps.mirror(image_pil)
 
-            st.image(
-                image_pil,
-                caption="Foto setelah flip horizontal",
-                output_format="PNG",
-                use_container_width=True,
-            )
+            show_png(image_pil, "Foto setelah flip horizontal")
 
             with st.spinner("Mendeteksi dan memprediksi semua wajah..."):
                 results = predict_faces(image_pil, method, models, mtcnn)
 
             if results:
                 annotated_image = draw_face_boxes(image_pil, results)
-                st.image(
-                    annotated_image,
-                    caption="Deteksi wajah dan hasil prediksi",
-                    output_format="PNG",
-                    use_container_width=True,
-                )
+                show_png(annotated_image, "Deteksi wajah dan hasil prediksi")
 
             show_face_results(results)
 
