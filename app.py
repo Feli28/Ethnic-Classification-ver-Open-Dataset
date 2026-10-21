@@ -69,7 +69,7 @@ def show_image(image, caption=None, width=640):
             if image_rgb.dtype != np.uint8:
                 image_rgb = np.clip(image_rgb, 0, 255).astype(np.uint8)
 
-        st.image(image_rgb, caption=caption, width=width)
+        st.image(image_rgb, caption=caption, width=width, channels="RGB")
     except Exception as exc:
         st.error(f"Gambar gagal ditampilkan: {exc}")
 
@@ -488,8 +488,7 @@ elif source == "Ambil Foto":
                 Image.open(BytesIO(raw_bytes))
             ).convert("RGB")
 
-            # Flip horizontal satu kali untuk efek cermin yang diinginkan.
-            image_pil = ImageOps.mirror(image_pil)
+            # Foto ditampilkan dan diproses tanpa dibalik secara horizontal.
 
             st.subheader("1. Foto Input")
             show_image(image_pil, "Foto yang akan diproses", width=640)
