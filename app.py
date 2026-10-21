@@ -49,27 +49,29 @@ RTC_CONFIGURATION = {
 # =========================================================
 def show_image(image, caption=None, width=640):
     """
-    Tampilkan PIL Image atau array RGB menggunakan st.image.
-    Untuk array OpenCV BGR, ubah dulu menjadi RGB sebelum memanggil fungsi ini.
+    Tampilkan gambar sebagai PIL Image agar jalur rendering Streamlit
+    konsisten untuk gambar input, hasil deteksi, dan crop.
     """
     try:
         if isinstance(image, Image.Image):
-            image_rgb = np.asarray(image.convert("RGB"))
+            image_pil = image.convert("RGB")
         else:
-            image_rgb = np.asarray(image)
+            image_array = np.asarray(image)
 
-            if image_rgb.ndim == 2:
-                image_rgb = cv2.cvtColor(image_rgb, cv2.COLOR_GRAY2RGB)
-            elif image_rgb.ndim == 3 and image_rgb.shape[2] == 4:
-                image_rgb = cv2.cvtColor(image_rgb, cv2.COLOR_RGBA2RGB)
-            elif image_rgb.ndim != 3 or image_rgb.shape[2] != 3:
-                st.error(f"Format gambar tidak didukung: {image_rgb.shape}")
+            if image_array.ndim == 2:
+                image_array = cv2.cvtColor(image_array, cv2.COLOR_GRAY2RGB)
+            elif image_array.ndim == 3 and image_array.shape[2] == 4:
+                image_array = cv2.cvtColor(image_array, cv2.COLOR_RGBA2RGB)
+            elif image_array.ndim != 3 or image_array.shape[2] != 3:
+                st.error(f"Format gambar tidak didukung: {image_array.shape}")
                 return
 
-            if image_rgb.dtype != np.uint8:
-                image_rgb = np.clip(image_rgb, 0, 255).astype(np.uint8)
+            if image_array.dtype != np.uint8:
+                image_array = np.clip(image_array, 0, 255).astype(np.uint8)
 
-        st.image(image_rgb, caption=caption, width=width, channels="RGB")
+            image_pil = Image.fromarray(np.ascontiguousarray(image_array))
+
+        st.image(image_pil, caption=caption, width=width)
     except Exception as exc:
         st.error(f"Gambar gagal ditampilkan: {exc}")
 
