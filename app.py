@@ -329,9 +329,9 @@ def show_face_results(results):
 
         with col_image:
             if result["crop"] is not None:
-                show_image(
-                    result["crop"],
-                    "Crop wajah (510 × 510)",
+                st.image(
+                    np.array(result["crop"].convert("RGB")),
+                    caption="Crop wajah (510 x 510)",
                     width=300,
                 )
 
@@ -443,63 +443,81 @@ except Exception as exc:
 # ---------------------------------------------------------
 if source == "Upload Gambar":
     uploaded_file = st.file_uploader(
-        "Pilih gambar wajah",
+        "Upload citra wajah",
         type=["jpg", "jpeg", "png"],
         key="upload_image",
     )
 
     if uploaded_file is not None:
         try:
-            image_pil = ImageOps.exif_transpose(
-                Image.open(BytesIO(uploaded_file.getvalue()))
-            ).convert("RGB")
+            image = Image.open(uploaded_file).convert("RGB")
+            image_rgb = np.array(image)
+            image_bgr = cv2.cvtColor(
+                image_rgb, cv2.COLOR_RGB2BGR
+            )
 
             st.subheader("1. Gambar Input")
-            show_image(image_pil, "Gambar asli", width=640)
+            st.image(image_rgb, caption="Gambar asli", width=450)
 
-            if st.button("Prediksi", type="primary", key="predict_upload"):
+            if st.button("Prediksi", type="primary"):
                 with st.spinner("Mendeteksi dan memprediksi wajah..."):
-                    results = predict_faces(image_pil, method, models, mtcnn)
+                    results = predict_faces(
+                        Image.fromarray(image_rgb),
+                        method,
+                        models,
+                        mtcnn,
+                    )
 
                 st.subheader("2. Hasil Deteksi")
+
                 if results:
-                    show_image(
-                        draw_face_boxes(image_pil, results),
-                        "Deteksi wajah dan hasil prediksi",
-                        width=640,
+                    annotated_rgb = draw_face_boxes(
+                        Image.fromarray(image_rgb),
+                        results,
                     )
+                    st.image(
+                        annotated_rgb,
+                        caption="Deteksi wajah dan hasil prediksi",
+                        width=450,
+                    )
+
                 show_face_results(results)
+
         except Exception as exc:
             st.error("Gagal memproses gambar.")
             st.exception(exc)
-
 
 # ---------------------------------------------------------
 # AMBIL FOTO: OTOMATIS DIPREDIKSI
 # ---------------------------------------------------------
 elif source == "Ambil Foto":
-    camera_image = st.camera_input(
-        "Ambil foto menggunakan kamera",
-        key="capture_image",
-    )
+    camera_image = st.camera_input("Ambil foto")
 
     if camera_image is not None:
         try:
-            raw_bytes = camera_image.getvalue()
-            image_pil = ImageOps.exif_transpose(
-                Image.open(BytesIO(raw_bytes))
-            ).convert("RGB")
-
-            # Foto ditampilkan dan diproses tanpa dibalik secara horizontal.
+            image = Image.open(camera_image).convert("RGB")
+            image_rgb = np.array(image)
 
             st.subheader("1. Foto Input")
-            show_image(image_pil, "Foto yang akan diproses", width=640)
+            st.image(
+                image_rgb,
+                caption="Foto yang akan diproses",
+                width=450,
+            )
 
-            cache_key = (hashlib.md5(raw_bytes).hexdigest(), method)
+            cache_key = (
+                hashlib.md5(camera_image.getvalue()).hexdigest(),
+                method,
+            )
 
             if st.session_state.get("photo_cache_key") != cache_key:
                 with st.spinner("Mendeteksi dan memprediksi wajah..."):
-                    results = predict_faces(image_pil, method, models, mtcnn)
+                    results = predict_faces(
+                        Image.fromarray(image_rgb),
+                        method,
+                        models,
+                        mtcnn,
+                    )
 
                 st.session_state["photo_cache_key"] = cache_key
                 st.session_state["photo_results"] = results
@@ -507,18 +525,23 @@ elif source == "Ambil Foto":
                 results = st.session_state.get("photo_results", [])
 
             st.subheader("2. Hasil Deteksi")
+
             if results:
-                show_image(
-                    draw_face_boxes(image_pil, results),
-                    "Deteksi wajah dan hasil prediksi",
-                    width=640,
+                annotated_rgb = draw_face_boxes(
+                    Image.fromarray(image_rgb),
+                    results,
                 )
+                st.image(
+                    annotated_rgb,
+                    caption="Deteksi wajah dan hasil prediksi",
+                    width=450,
+                )
+
             show_face_results(results)
 
         except Exception as exc:
             st.error("Gagal memproses foto.")
             st.exception(exc)
-
 
 # ---------------------------------------------------------
 # LIVE WEBCAM
